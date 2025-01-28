@@ -100,7 +100,9 @@
             "cacheVariables": {
                 "CMAKE_SYSTEM_NAME": "Darwin",
                 "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
-                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0"
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
             }
         },
         {
