@@ -25,24 +25,24 @@ static constexpr auto maxPitchOctaves = 2;
 int Timing::maxInputFrameCount(bool mayDownsampleInput) const
 {
 	const auto max = (int64_t(sampleRates.input) << (maxPitchOctaves + log2SynthesisHop + 3)) / sampleRates.output;
-	return max + 1;
+	return int(max + 1);
 }
 
 int Timing::maxOutputFrameCount(bool mayUpsampleOutput) const
 {
 	const auto max = (int64_t(sampleRates.output) << (maxPitchOctaves + log2SynthesisHop)) / sampleRates.input;
-	return max + 1;
+	return int(max + 1);
 }
 
 double Timing::calculateInputHop(const Request &request) const
 {
-	const double unitHop = (1 << log2SynthesisHop) * Resample::Operations().setup(sampleRates, request.pitch);
+	const double unitHop = (1 << log2SynthesisHop) * Resample::Operations().setup(sampleRates, request.pitch, request.resampleMode);
 	return unitHop * request.speed;
 }
 
 void Timing::preroll(Request &request) const
 {
-	request.position -= 4. * calculateInputHop(request);
+	request.position -= calculateInputHop(request);
 	request.reset = true;
 }
 

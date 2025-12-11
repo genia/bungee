@@ -31,10 +31,10 @@ void fail(int level, const char *m2, const char *file, int line);
 	} while (false)
 
 // Checks with cost O(N) (for tests applied a small number of times per grain)
-#define BUNGEE_ASSERT1(condition) BUNGEE_ASSERT(1, condition)
+#define BUNGEE_ASSERT1(...) BUNGEE_ASSERT(1, (__VA_ARGS__))
 
 // Checks with cost O(N*N) (for tests applied a small number of times per bin or per sample)
-#define BUNGEE_ASSERT2(condition) BUNGEE_ASSERT(2, condition)
+#define BUNGEE_ASSERT2(...) BUNGEE_ASSERT(2, (__VA_ARGS__))
 
 #ifndef FE_INEXACT
 #	define FE_INEXACT 0
@@ -55,8 +55,11 @@ struct FloatingPointExceptions
 
 	FloatingPointExceptions(int allowed);
 	~FloatingPointExceptions();
+
+	void check() const;
 #else
 	inline FloatingPointExceptions(int) {}
+	inline void check() const {}
 #endif
 };
 

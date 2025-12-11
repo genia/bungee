@@ -9,16 +9,15 @@ struct Instrumentation
 {
 	struct Call
 	{
-		Call(Instrumentation *instrumentation, int sequence);
+		Call(Instrumentation &instrumentation, int sequence);
 		~Call();
 	};
 
-	static thread_local Instrumentation *threadLocal;
-	bool enabled = BUNGEE_SELF_TEST >= 2;
+	bool enabled = false;
 	int expected = 0;
-	int logCount = 0;
+	bool firstGrain = true;
 
-	static void log(const char *format, ...);
+	void log(const char *format, ...);
 
 	void enableInstrumentation(bool enable)
 	{

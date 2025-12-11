@@ -8,6 +8,7 @@ ContinuationIndentWidth: 4
 TabWidth: 4
 AccessModifierOffset: -4
 IndentCaseLabels: false
+LambdaBodyIndentation: OuterScope
 
 AlignOperands : DontAlign
 AlignAfterOpenBracket: DontAlign
@@ -27,12 +28,10 @@ BraceWrapping:
   AfterNamespace: false
   AfterFunction: true
   AfterStruct: true
-  AfterEnum: true
   AfterClass: true
+  AfterEnum: true
   BeforeElse: true
   AfterControlStatement: Always
-
-BracketAlignmentStyle: DontAlign
 
 FixNamespaceComments: true
 NamespaceIndentation: None

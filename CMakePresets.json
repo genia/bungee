@@ -40,14 +40,27 @@
             }
         },
         {
+            "name": "linux-aarch64",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "aarch64-linux-gnu-gcc",
+                "CMAKE_CXX_COMPILER": "aarch64-linux-gnu-g++",
+                "CMAKE_STRIP": "aarch64-linux-gnu-strip",
+                "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+                "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+                "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY"
+            }
+        },
+        {
             "name": "android",
             "hidden": true,
             "inherits": "base",
-            "toolchainFile": "$env{ANDROID_NDK}/build/cmake/android.toolchain.cmake",
+            "toolchainFile": "$env{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "ANDROID_TOOLCHAIN": "clang",
-                "ANDROID_STL": "c++_shared",
+                "ANDROID_STL": "c++_static",
                 "BUILD_SHARED_LIBS": "false"
             }
         },
@@ -89,6 +102,7 @@
             "inherits": "base",
             "generator": "Xcode",
             "cacheVariables": {
+                "BUNGEE_INSTALL_FRAMEWORK": "ON",
                 "CMAKE_CONFIGURATION_TYPES": "Release",
                 "CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER": "com.parabolaresearch.bungee",
                 "CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED": "NO"

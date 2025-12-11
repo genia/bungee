@@ -14,18 +14,19 @@ namespace Bungee {
 
 Internal::Stretcher::Stretcher(SampleRates sampleRates, int channelCount, int log2SynthesisHopAdjust) :
 	Timing(sampleRates, log2SynthesisHopAdjust),
-	transforms(Fourier::transforms()),
-	input(log2SynthesisHop, channelCount, *transforms),
+	input(log2SynthesisHop, channelCount, transforms),
 	grains(4),
-	output(*transforms, log2SynthesisHop, channelCount, maxOutputFrameCount(true), 0.25f, {1.f, 0.5f})
+	output(transforms, log2SynthesisHop, channelCount, maxOutputFrameCount(true), 0.25f, {1.f, 0.5f})
 {
 	for (auto &grain : grains.vector)
 		grain = std::make_unique<Grain>(log2SynthesisHop, channelCount);
+
+	Fourier::resize<true>(grains[0].log2TransformLength, 1, temporary);
 }
 
 InputChunk Internal::Stretcher::specifyGrain(const Request &request, double bufferStartPosition)
 {
-	Instrumentation::Call call(this, 0);
+	Instrumentation::Call call(*this, 0);
 	const Assert::FloatingPointExceptions floatingPointExceptions(0);
 
 	grains.rotate();
@@ -33,19 +34,17 @@ InputChunk Internal::Stretcher::specifyGrain(const Request &request, double buff
 	auto &grain = grains[0];
 	auto &previous = grains[1];
 
-	return grain.specify(request, previous, sampleRates, log2SynthesisHop, bufferStartPosition);
+	return grain.specify(request, previous, sampleRates, log2SynthesisHop, bufferStartPosition, *this);
 }
 
 void Internal::Stretcher::analyseGrain(const float *data, std::ptrdiff_t stride, int muteFrameCountHead, int muteFrameCountTail)
 {
-	Instrumentation::Call call(this, 1);
+	Instrumentation::Call call(*this, 1);
 	const Assert::FloatingPointExceptions floatingPointExceptions(FE_INEXACT | FE_UNDERFLOW | FE_DENORMALOPERAND);
 
 	auto &grain = grains[0];
 	const auto &previous = grains[1];
 
-	if (Instrumentation::threadLocal->logCount == 0)
-		Instrumentation::log("Stretcher: sampleRates=[%d, %d] channelCount=%d  synthesisHop=%d", sampleRates.input, sampleRates.output, input.windowedInput.cols(), 1 << log2SynthesisHop);
 	Instrumentation::log("analyseGrain: position=%f speed=%f pitch=%f reset=%s data=%p stride=%d mute=%d:%d", grain.request.position, grain.request.speed, grain.request.pitch, grain.request.reset ? "true" : "false", data, stride, muteFrameCountHead, muteFrameCountTail);
 
 	grain.muteFrameCountHead = muteFrameCountHead;
@@ -54,13 +53,13 @@ void Internal::Stretcher::analyseGrain(const float *data, std::ptrdiff_t stride,
 	grain.validBinCount = 0;
 	if (grain.valid())
 	{
-		auto m = grain.inputChunkMap(data, stride, muteFrameCountHead, muteFrameCountTail, previous);
+		auto m = grain.inputChunkMap(data, stride, muteFrameCountHead, muteFrameCountTail, previous, *this);
 
-		auto ref = grain.resampleInput(m, 8 << log2SynthesisHop, muteFrameCountHead, muteFrameCountTail);
+		auto ref = grain.resampleInput(m, log2SynthesisHop + 3, muteFrameCountHead, muteFrameCountTail);
 
 		auto log2TransformLength = input.applyAnalysisWindow(ref, muteFrameCountHead, muteFrameCountTail);
 
-		transforms->forward(log2TransformLength, input.windowedInput, grain.transformed);
+		transforms.forward(log2TransformLength, input.windowedInput, grain.transformed);
 
 		const auto n = Fourier::binCount(grain.log2TransformLength) - 1;
 		grain.validBinCount = std::min<int>(std::ceil(n / grain.resampleOperations.output.ratio), n) + 1;
@@ -84,29 +83,30 @@ void Internal::Stretcher::analyseGrain(const float *data, std::ptrdiff_t stride,
 
 void Internal::Stretcher::synthesiseGrain(OutputChunk &outputChunk)
 {
-	Instrumentation::Call call(this, 2);
+	Instrumentation::Call call(*this, 2);
 
 	const Assert::FloatingPointExceptions floatingPointExceptions(FE_INEXACT);
 
 	auto &grain = grains[0];
 	if (grain.valid())
 	{
-		auto n = Fourier::binCount(grain.log2TransformLength);
-
 		BUNGEE_ASSERT1(!grain.passthrough || grain.analysis.speed == grain.passthrough);
 
 		Synthesis::synthesise(log2SynthesisHop, grain, grains[1]);
 
 		BUNGEE_ASSERT2(!grain.passthrough || grain.rotation.topRows(grain.validBinCount).isZero());
 
-		auto theta = grain.rotation.topRows(grain.validBinCount).cast<float>() * (std::numbers::pi_v<float> / 0x8000);
-		auto t = theta.cos() + theta.sin() * std::complex<float>{0, 1};
+		auto t = temporary.topRows(grain.validBinCount);
+
+		t = grain.rotation.topRows(grain.validBinCount).cast<float>() * (std::complex<float>{0, std::numbers::pi_v<float> / 0x8000});
+		t = t.exp();
+
 		if (grain.reverse())
 			grain.transformed.topRows(grain.validBinCount) = grain.transformed.topRows(grain.validBinCount).conjugate().colwise() * t;
 		else
-			grain.transformed.topRows(grain.validBinCount).colwise() *= t;
+			grain.transformed.topRows(grain.validBinCount) = grain.transformed.topRows(grain.validBinCount).colwise() * t;
 
-		transforms->inverse(grain.log2TransformLength, output.inverseTransformed, grain.transformed);
+		transforms.inverse(grain.log2TransformLength, output.inverseTransformed, grain.transformed);
 	}
 
 	output.applySynthesisWindow(log2SynthesisHop, grains, output.synthesisWindow);

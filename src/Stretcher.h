@@ -18,11 +18,12 @@ struct Stretcher :
 	Timing,
 	Instrumentation
 {
-	std::unique_ptr<Fourier::Transforms> transforms;
+	Fourier::Transforms transforms;
 	Input input;
 	Grains grains;
 	Output output;
 	Eigen::ArrayXXf previousWindowedInput;
+	Eigen::ArrayXcf temporary;
 
 	Stretcher(SampleRates sampleRates, int channelCount, int log2SynthesisHopAdjust);
 
@@ -37,11 +38,11 @@ struct Stretcher :
 	bool isFlushed() const;
 };
 
-template <class S, const char **e, const char **v>
+template <class S, const char *const *e, const char *const *v>
 struct Functions :
 	Bungee::Functions
 {
-	Functions()
+	constexpr Functions()
 	{
 		edition = []() { return *e; };
 		version = []() { return *v; };

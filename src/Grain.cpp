@@ -28,19 +28,22 @@ Grain::Grain(int log2SynthesisHop, int channelCount) :
 	partials.reserve(1 << log2TransformLength);
 }
 
-InputChunk Grain::specify(const Request &r, Grain &previous, SampleRates sampleRates, int log2SynthesisHop, double bufferStartPosition)
+InputChunk Grain::specify(const Request &r, Grain &previous, SampleRates sampleRates, int log2SynthesisHop, double bufferStartPosition, Internal::Instrumentation &instrumentation)
 {
 	request = r;
 	BUNGEE_ASSERT1(request.pitch > 0.);
 
 	const Assert::FloatingPointExceptions floatingPointExceptions(FE_INEXACT);
-
-	const auto unitHop = (1 << log2SynthesisHop) * resampleOperations.setup(sampleRates, request.pitch);
+	const auto unitHop = (1 << log2SynthesisHop) * resampleOperations.setup(sampleRates, request.pitch, request.resampleMode);
 
 	requestHop = request.position - previous.request.position;
 
-	if (!std::isnan(request.speed) && !std::isnan(requestHop) && std::abs(request.speed * unitHop - requestHop) > 1.)
-		Instrumentation::log("specifyGrain: speed=%f implies hop of %f/%f but position has advanced by %f/%f since previous grain", request.speed, request.speed * unitHop, sampleRates.input, requestHop, sampleRates.input);
+	if (instrumentation.firstGrain)
+		instrumentation.log("Stretcher: sampleRates=[%d, %d] channelCount=%d  synthesisHop=%d", sampleRates.input, sampleRates.output, transformed.cols(), 1 << log2TransformLength >> 3);
+	instrumentation.firstGrain = false;
+
+	if (!request.reset && !std::isnan(request.speed) && !std::isnan(requestHop) && std::abs(request.speed * unitHop - requestHop) > 1.)
+		instrumentation.log("specifyGrain: speed=%f implies hop of %f/%d but position has advanced by %f/%d since previous grain", request.speed, request.speed * unitHop, sampleRates.input, requestHop, sampleRates.input);
 
 	if (std::isnan(requestHop) || request.reset)
 		requestHop = request.speed * unitHop;
@@ -72,32 +75,43 @@ InputChunk Grain::specify(const Request &r, Grain &previous, SampleRates sampleR
 	inputResampled.frameCount = 1 << log2TransformLength;
 
 	{
-		auto halfInputFrameCount = inputResampled.frameCount / 2;
+		int halfInputFrameCount = inputResampled.frameCount / 2;
 		if (resampleOperations.input.ratio != 1.f)
-			halfInputFrameCount = int(std::round(halfInputFrameCount / resampleOperations.input.ratio)) + 1;
-		inputChunk.begin = int(std::round(request.position - bufferStartPosition)) - halfInputFrameCount;
-		inputChunk.end = int(std::round(request.position - bufferStartPosition)) + halfInputFrameCount;
+			halfInputFrameCount = int(std::ceil(halfInputFrameCount / resampleOperations.input.ratio)) + 2;
 
+		inputChunk.begin = -halfInputFrameCount;
+		inputChunk.end = +halfInputFrameCount;
+
+		if (std::isnan(request.position))
+			return InputChunk{};
+
+		const int offset = int(std::round(request.position - bufferStartPosition));
+		inputChunk.begin += offset;
+		inputChunk.end += offset;
+		inputPosition = bufferStartPosition + offset;
 		return inputChunk;
 	}
 }
 
-void Grain::overlapCheck(Eigen::Ref<Eigen::ArrayXXf> input, int muteFrameCountHead, int muteFrameCountTail, const Grain &previous)
+void Grain::overlapCheck(Eigen::Ref<Eigen::ArrayXXf> input, int muteFrameCountHead, int muteFrameCountTail, const Grain &previous, Internal::Instrumentation &instrumentation)
 {
 	const auto frameCount = inputChunk.end - inputChunk.begin;
 	const auto activeRows = frameCount - muteFrameCountHead - muteFrameCountTail;
 
+#ifdef EIGEN_RUNTIME_NO_MALLOC
+	Eigen::internal::set_is_malloc_allowed(true);
+#endif
 	inputCopy.resize(frameCount, input.cols());
+#ifdef EIGEN_RUNTIME_NO_MALLOC
+	Eigen::internal::set_is_malloc_allowed(false);
+#endif
 
 	inputCopy.topRows(muteFrameCountHead).setZero();
 	inputCopy.middleRows(muteFrameCountHead, activeRows) = input.middleRows(muteFrameCountHead, activeRows);
 	inputCopy.bottomRows(muteFrameCountTail).setZero();
 
 	if (inputCopy.hasNaN())
-	{
-		Instrumentation::log("Bungee: NaN detected in input audio");
-		std::abort();
-	}
+		instrumentation.log("BAD INPUT: NaN detected in input audio");
 
 	const auto overlapStart = std::max(inputChunk.begin, previous.inputChunk.begin);
 	const auto overlapEnd = std::min(inputChunk.end, previous.inputChunk.end);
@@ -110,7 +124,7 @@ void Grain::overlapCheck(Eigen::Ref<Eigen::ArrayXXf> input, int muteFrameCountHe
 
 		if (!(overlapCurrent == overlapPrevious).all())
 		{
-			Instrumentation::log("UNEXPECTED INPUT: the %s %d frames of this grain's input audio chunk are different to the %s %d frames of the previous grain's audio audio input chunk",
+			instrumentation.log("UNEXPECTED INPUT: the %s %d frames of this grain's input audio chunk are different to the %s %d frames of the previous grain's audio audio input chunk",
 				overlapStart == inputChunk.begin ? "first" : "last",
 				overlapFrames,
 				overlapStart == inputChunk.begin ? "last" : "first",
@@ -123,12 +137,15 @@ Eigen::Ref<Eigen::ArrayXXf> Grain::resampleInput(Eigen::Ref<Eigen::ArrayXXf> inp
 {
 	if (resampleOperations.input.function)
 	{
-		float offset = float(inputChunk.begin - request.position);
-		offset *= resampleOperations.input.ratio;
-		offset += 1 << (log2WindowLength - 1);
-		offset -= analysis.positionError;
+		BUNGEE_ASSERT1(input.rows() % 2 == 0);
 
-		resampleOperations.input.function(inputResampled, offset, input, resampleOperations.input.ratio, resampleOperations.input.ratio, false, muteFrameCountHead, muteFrameCountTail);
+		inputResampled.offset = inputPosition - request.position - input.rows() / 2;
+		inputResampled.offset *= resampleOperations.input.ratio;
+		inputResampled.offset += 1 << (log2WindowLength - 1);
+		inputResampled.offset -= analysis.positionError;
+
+		Resample::External external(input, muteFrameCountHead, muteFrameCountTail);
+		resampleOperations.input.function(inputResampled, external, resampleOperations.input.ratio, resampleOperations.input.ratio, false);
 
 		muteFrameCountHead = muteFrameCountTail = 0;
 

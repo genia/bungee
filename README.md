@@ -1,4 +1,4 @@
-# 🎵 Bungee: Audio Time Stretch and Pitch Shift C++ Library
+# Bungee: Audio time and pitch library
 
 Bungee is a real-time library for stretching audio. It can:
 * Adjust the playback speed of audio without affecting pitch
@@ -126,8 +126,8 @@ while (true)
 ## Dependencies
 
 The Bungee library gratefully depends on:
-* Eigen C++ library for buffer management and mathematical operations on vectors and arrays 
-* KissFFT library for Fast Fourier Transforms
+* The Eigen C++ library for buffer management and mathematical operations on vectors and arrays
+* The PFFFT library for Fast Fourier Transforms
 
 The sample `bungee` command-line utility also uses:
 * cxxopts library for parsing command-line options
@@ -146,3 +146,4 @@ Try Bungee Pro [now in your browser](https://bungee.parabolaresearch.com/change-
     * Arm 64-bit for Android, iOS and MacOS
     * x86-64 for Linux, Windows and MacOS
 * A ready-to-use Web Audio implementation 
+

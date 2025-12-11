@@ -6,6 +6,7 @@ rm -rf ./artifacts ./install
 mkdir -p ./artifacts ./install
 
 for PRESET in \
+    linux-aarch64 \
     linux-x86_64 \
     windows-x86_64 \
     android-armeabi-v7a \

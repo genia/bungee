@@ -5,21 +5,22 @@
 
 #include "Assert.h"
 
+#include <bit>
 #include <type_traits>
 
 namespace Bungee {
 
 template <bool floor = false>
-static inline int log2(int x)
+static inline int log2(unsigned x)
 {
 	BUNGEE_ASSERT1(x > 0);
 	BUNGEE_ASSERT1(floor || !(x & (x << 1)));
 
 	int y;
 	if constexpr (floor)
-		y = __builtin_clz(1) - __builtin_clz(x);
+		y = std::bit_width(x) - 1;
 	else
-		y = __builtin_ctz(x);
+		y = std::countr_zero(x);
 
 	BUNGEE_ASSERT1(floor ? (1 << y <= x && x < 2 << y) : (x == 1 << y));
 	return y;

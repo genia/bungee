@@ -2,19 +2,21 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include <bungee/Bungee.h>
-#include <bungee/Push.h>
 
 #define CXXOPTS_NO_EXCEPTIONS
 #include "cxxopts.hpp"
 #undef CXXOPTS_NO_EXCEPTIONS
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace Bungee::CommandLine {
@@ -44,9 +46,30 @@ struct Options :
 			("s,speed", "output speed as multiple of input speed", cxxopts::value<double>()->default_value("1")) //
 			("p,pitch", "output pitch shift in semitones", cxxopts::value<double>()->default_value("0")) //
 			;
-		add_options("Developer / Debug") //
+		auto optionAdder = add_options(helpGroups.emplace_back("Processing"));
+
+#define X_BEGIN(Type, type) \
+		{ \
+			std::string names, d, a = "[";
+#define X_END(Type, type) \
+			optionAdder(#type, names + "]", cxxopts::value<std::string>()->default_value(d)); \
+		}
+#define X_ITEM(Type, type, mode, description) \
+		names += a + #mode; \
+		a = "|"; \
+		if (Request{}.type##Mode == type##Mode_##mode) \
+			d = #mode;
+
+		BUNGEE_MODES
+
+#undef X_BEGIN
+#undef X_END
+#undef X_ITEM
+			//
+			;
+		add_options(helpGroups.emplace_back("Developer")) //
 			("grain", "increases [+1] or decreases [-1] grain duration by a factor of two", cxxopts::value<int>()->default_value("0")) //
-			("push", "input push chunk size (0 for default input pull operation)", cxxopts::value<int>()->default_value("0")) //
+			("push", "input chunk size (0 for pull operation, negative for random push chunk size)", cxxopts::value<int>()->default_value("0")) //
 			("instrumentation", "report useful diagnostic information to system log") //
 			;
 		add_options(helpGroups.emplace_back("Help")) //
@@ -93,17 +116,80 @@ struct Parameters :
 
 		if ((*this)["push"].as<int>() && request.speed < 0.)
 			fail("speed not greater than zero in 'push' mode");
+
+#define X_BEGIN(Type, type) \
+		{ \
+			const auto s = (*this)[#type].as<std::string>(); \
+			if (false) \
+			{ \
+			}
+
+#define X_ITEM(Type, type, mode, description) \
+			else if (s == #mode) \
+			{ \
+				request.type##Mode = type##Mode_##mode; \
+			}
+
+#define X_END(Type, type) \
+			else \
+			{ \
+				Bungee::CommandLine::fail("Unrecognised value for --" #type); \
+			} \
+		}
+
+		BUNGEE_MODES
+
+#undef X_BEGIN
+#undef X_ITEM
+#undef X_END
 	}
 };
 
 struct Processor
 {
+	struct OutputChunkBuffer :
+		OutputChunk
+	{
+		std::vector<float> audio;
+		std::vector<float *> channelPointers;
+		Request request[2]{};
+
+		OutputChunkBuffer(int frameCount, int channelCount) :
+			OutputChunk{},
+			audio(frameCount * channelCount),
+			channelPointers(channelCount)
+		{
+			OutputChunk::request[0] = &request[0];
+			OutputChunk::request[1] = &request[1];
+
+			OutputChunk::data = audio.data();
+			OutputChunk::channelStride = frameCount;
+
+			for (int c = 0; c < channelCount; ++c)
+				channelPointers[c] = audio.data() + c * OutputChunk::channelStride;
+		}
+
+		OutputChunkBuffer(const OutputChunkBuffer &) = delete;
+		OutputChunkBuffer &operator=(const OutputChunkBuffer &) = delete;
+
+		const OutputChunk &outputChunk(int frameCount, double positionBegin, double positionEnd)
+		{
+			OutputChunk::frameCount = frameCount;
+			request[0].position = positionBegin;
+			request[1].position = positionEnd;
+			request[0].speed = 1.;
+			request[1].speed = 1.;
+			return *this;
+		}
+	};
+
 	std::vector<char> wavHeader;
 	std::vector<char> wavData;
 	decltype(wavData.begin()) o;
 	SampleRates sampleRates;
 	int inputFrameCount;
 	int inputChannelStride;
+	int sampleFormat;
 	int channelCount;
 	int bitsPerSample;
 	std::vector<float> inputBuffer;
@@ -150,6 +236,7 @@ struct Processor
 				if (sampleRates.output < 8000 || sampleRates.output > 192000)
 					fail("Output sample rate must be in the range [8000, 192000] kHz");
 
+				sampleFormat = read<uint16_t>(&wavHeader[20]);
 				channelCount = read<uint16_t>(&wavHeader[22]);
 				bitsPerSample = read<uint16_t>(&wavHeader[34]);
 				if (!channelCount)
@@ -169,20 +256,14 @@ struct Processor
 		inputChannelStride = inputFrameCount;
 		inputBuffer.resize(channelCount * inputChannelStride);
 
-		if (bitsPerSample == 16)
-		{
-			for (int i = 0; i < inputFrameCount; ++i)
-				for (int c = 0; c < channelCount; ++c)
-					inputBuffer[c * inputChannelStride + i] = toFloat(read<int16_t>(&wavData[(i * channelCount + c) * sizeof(int16_t)]));
-		}
-		else if (bitsPerSample == 32)
-		{
-			for (int i = 0; i < inputFrameCount; ++i)
-				for (int c = 0; c < channelCount; ++c)
-					inputBuffer[c * inputChannelStride + i] = toFloat(read<int32_t>(&wavData[(i * channelCount + c) * sizeof(int32_t)]));
-		}
+		if (sampleFormat == 1 && bitsPerSample == 16)
+			readInputAudio<int16_t>();
+		else if (sampleFormat == 1 && bitsPerSample == 32)
+			readInputAudio<int32_t>();
+		else if (sampleFormat == 3 && bitsPerSample == 32)
+			readInputAudio<float>();
 		else
-			fail("Please check your input file: only 16-bit and 32-bit PCM are supported");
+			fail("Please check your input file: its sample format is not supported");
 
 		std::fill(wavData.begin(), wavData.end(), 0);
 
@@ -190,8 +271,21 @@ struct Processor
 		if (!outputFile)
 			fail("Please check your output path: there was a problem opening the output file");
 
-		const auto nOutput = int(inputFrameCount / std::max(.01, fabs(request.speed)) * sampleRates.output / sampleRates.input);
-		wavData.resize(nOutput * channelCount * bitsPerSample / 8);
+		{
+			constexpr size_t maximumOutputDataBytes = 1ll << 30; // 1G
+			const size_t bytesPerFrame = channelCount * bitsPerSample / 8;
+			const size_t maximumOutputFrameCount = maximumOutputDataBytes / bytesPerFrame;
+
+			size_t outputFrameCount = std::floor(inputFrameCount / std::fabs(request.speed) * sampleRates.output / sampleRates.input);
+			if (outputFrameCount > maximumOutputFrameCount)
+			{
+				outputFrameCount = maximumOutputFrameCount;
+				std::cerr << "Warning: output audio will be truncated to 1GB\n";
+			}
+
+			const size_t wavDataBytes = outputFrameCount * bytesPerFrame;
+			wavData.resize(wavDataBytes);
+		}
 
 		restart(request);
 	}
@@ -208,16 +302,15 @@ struct Processor
 
 	bool write(OutputChunk outputChunk)
 	{
-		double position[2];
-		position[OutputChunk::begin] = outputChunk.request[OutputChunk::begin]->position;
-		position[OutputChunk::end] = outputChunk.request[OutputChunk::end]->position;
+		const auto positionBegin = outputChunk.request[0]->position;
+		const auto positionEnd = outputChunk.request[1]->position;
 
-		if (!std::isnan(position[OutputChunk::begin]))
+		if (!std::isnan(positionBegin) && positionBegin != positionEnd)
 		{
-			double nPrerollInput = outputChunk.request[OutputChunk::begin]->speed < 0. ? position[OutputChunk::begin] - inputFrameCount + 1 : -position[OutputChunk::begin];
+			double nPrerollInput = outputChunk.request[0]->speed < 0. ? positionBegin - inputFrameCount + 1 : -positionBegin;
 			nPrerollInput = std::max(0, (int)std::round(nPrerollInput));
 
-			const int nPrerollOutput = (int)std::round(nPrerollInput * (outputChunk.frameCount / std::abs(position[OutputChunk::end] - position[OutputChunk::begin])));
+			const int nPrerollOutput = (int)std::round(nPrerollInput * (outputChunk.frameCount / std::abs(positionEnd - positionBegin)));
 
 			if (outputChunk.frameCount > nPrerollOutput)
 			{
@@ -264,6 +357,8 @@ struct Processor
 
 	bool writeChunk(Bungee::OutputChunk chunk)
 	{
+		if (sampleFormat == 3)
+			return writeSamples<float>(chunk);
 		if (bitsPerSample == 32)
 			return writeSamples<int32_t>(chunk);
 		else
@@ -281,25 +376,43 @@ struct Processor
 		outputFile.write(wavData.data(), wavData.size());
 	}
 
+	template <typename Sample>
+	void readInputAudio()
+	{
+		for (int i = 0; i < inputFrameCount; ++i)
+			for (int c = 0; c < channelCount; ++c)
+				inputBuffer[c * inputChannelStride + i] = toFloat(read<Sample>(&wavData[(i * channelCount + c) * sizeof(Sample)]));
+	}
+
 	template <typename Type>
 	static inline Type read(const char *data)
 	{
-		Type value = 0;
-		for (unsigned i = 0; i < sizeof(Type); ++i)
-			value |= (Type(data[i]) & 0xff) << 8 * i;
-		return value;
+		if constexpr (std::is_same_v<Type, float>)
+			return std::bit_cast<float>(read<uint32_t>(data));
+		else
+		{
+			Type value = 0;
+			for (unsigned i = 0; i < sizeof(Type); ++i)
+				value |= (Type(data[i]) & 0xff) << 8 * i;
+			return value;
+		}
 	}
 
 	template <typename Type>
 	static inline void write(char *data, Type value)
 	{
-		for (unsigned i = 0; i < sizeof(Type); ++i)
-			data[i] = value >> 8 * i;
+		if constexpr (std::is_same_v<Type, float>)
+			write(data, std::bit_cast<uint32_t>(value));
+		else
+			for (unsigned i = 0; i < sizeof(Type); ++i)
+				data[i] = value >> 8 * i;
 	}
 
 	template <typename Sample>
 	static inline float toFloat(Sample x)
 	{
+		if (std::is_same_v<Sample, float>)
+			return x;
 		constexpr float k = -1.f / std::numeric_limits<Sample>::min();
 		return k * x;
 	}
@@ -307,6 +420,8 @@ struct Processor
 	template <typename Sample>
 	static inline Sample fromFloat(float x)
 	{
+		if constexpr (std::is_same_v<Sample, float>)
+			return x;
 		x = std::ldexp(x, 8 * sizeof(Sample) - 1);
 		x = std::round(x);
 		if (x < std::numeric_limits<Sample>::min())

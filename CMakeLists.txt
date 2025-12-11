@@ -1,6 +1,7 @@
 set(BUNGEE_VERSION 0.0.0 CACHE STRING "Bungee version string")
 set(BUNGEE_SELF_TEST 0 CACHE STRING "Enable Bungee self tests (0=off, 1=fast, 2=full)")
 option(BUNGEE_BUILD_SHARED_LIBRARY "Build shared, dynamic Bungee library in addition to a static libary" ON)
+option(BUNGEE_INSTALL_FRAMEWORK "Install as a framework" OFF)
 set(BUNGEE_PRESET "" CACHE STRING "Name of the preset that we're building")
 
 if (BUNGEE_BUILD_SHARED_LIBRARY)
@@ -8,6 +9,7 @@ if (BUNGEE_BUILD_SHARED_LIBRARY)
 endif()
 
 cmake_minimum_required(VERSION 3.30...3.31)
+include(CheckCXXCompilerFlag)
 
 project(bungee VERSION ${BUNGEE_VERSION})
 set(CMAKE_CXX_STANDARD 20)
@@ -28,14 +30,15 @@ else()
 endif()  
 target_include_directories(bungee_library PRIVATE  submodules/eigen submodules .)
 target_compile_definitions(bungee_library PRIVATE
+  BUNGEE_VISIBILITY=${BUNGEE_EXPORT}
   BUNGEE_SELF_TEST=${BUNGEE_SELF_TEST}
   eigen_assert=BUNGEE_ASSERT1
   EIGEN_DONT_PARALLELIZE=1
-  BUNGEE_VISIBILITY=${BUNGEE_EXPORT}
+  $<$<CONFIG:Debug>:EIGEN_RUNTIME_NO_MALLOC=1>
 )
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/version.cpp PROPERTIES COMPILE_DEFINITIONS BUNGEE_VERSION=\"${BUNGEE_VERSION}\")
-target_compile_options(bungee_library PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fwrapv>)
-target_link_libraries(bungee_library PRIVATE kissfft)
+target_compile_options(bungee_library PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-fwrapv>)
+target_link_libraries(bungee_library PRIVATE pffft)
 if (ANDROID)
   target_link_libraries(bungee_library PRIVATE log)
 endif()
@@ -50,17 +53,16 @@ set_target_properties(bungee_executable PROPERTIES
   INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}"
 )
 
-# KissFFT build
-set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
-set(KISSFFT_PKGCONFIG OFF CACHE INTERNAL "" FORCE)
-set(KISSFFT_STATIC ON CACHE INTERNAL "" FORCE)
-set(KISSFFT_TEST OFF CACHE INTERNAL "" FORCE)
-set(KISSFFT_TOOLS OFF CACHE INTERNAL "" FORCE)
-add_subdirectory(submodules/kissfft EXCLUDE_FROM_ALL) # -Wcast-align
+# PFFFT as a static library
+add_library(pffft EXCLUDE_FROM_ALL STATIC
+  submodules/pffft/pffft.c
+  submodules/pffft/fftpack.c
+)
+target_compile_options(pffft PRIVATE -ffast-math -fno-finite-math-only -fno-exceptions)
 
 # Installation
 if (BUNGEE_BUILD_SHARED_LIBRARY)
-  if (APPLE)
+  if (BUNGEE_INSTALL_FRAMEWORK)
     set_target_properties(bungee_library PROPERTIES
       FRAMEWORK TRUE
       XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "iPhone Developer"
@@ -90,4 +92,9 @@ if (BUNGEE_BUILD_SHARED_LIBRARY)
     submodules/cxxopts/include/cxxopts.hpp
     DESTINATION ${CMAKE_INSTALL_PREFIX}/sample
   )
+
+get_property(BUNGEE_LIBRARY_OUTPUT_NAME TARGET bungee_library PROPERTY OUTPUT_NAME)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libbungee.pc.in ${CMAKE_CURRENT_BINARY_DIR}/libbungee.pc @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libbungee.pc DESTINATION ${CMAKE_INSTALL_PREFIX}/${BUNGEE_PRESET}/pkgconfig)
+
 endif()
