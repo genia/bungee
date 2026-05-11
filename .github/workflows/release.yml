@@ -90,7 +90,7 @@ jobs:
           echo "\`\`\`" | tee -a $GITHUB_STEP_SUMMARY
           find . \( -type f -o -type l \) -exec ls -l {} + | tee -a $GITHUB_STEP_SUMMARY
           echo "\`\`\`" | tee -a $GITHUB_STEP_SUMMARY
-          cp -R ${{github.workspace}}/ubuntu/install/* .
+          cp -RP ${{github.workspace}}/ubuntu/install/* .
           tar cvzf ../../bungee-v${BUNGEE_VERSION}.tgz *
 
       - name: ⭐ Create release

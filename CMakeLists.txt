@@ -49,7 +49,7 @@ add_executable(bungee_executable cmd/main.cpp)
 target_include_directories(bungee_executable PRIVATE submodules/cxxopts/include .)
 target_link_libraries(bungee_executable PRIVATE bungee_library)
 set_target_properties(bungee_executable PROPERTIES 
-  OUTPUT_NAME bungee
+  OUTPUT_NAME bungee-cli
   INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}"
 )
 
@@ -65,10 +65,9 @@ if (BUNGEE_BUILD_SHARED_LIBRARY)
   if (BUNGEE_INSTALL_FRAMEWORK)
     set_target_properties(bungee_library PROPERTIES
       FRAMEWORK TRUE
-      XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "iPhone Developer"
+      MACOSX_FRAMEWORK_IDENTIFIER com.parabolaresearch.bungee
       MACOSX_FRAMEWORK_BUNDLE_VERSION ${BUNGEE_VERSION}
       MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${BUNGEE_VERSION}
-      VERSION ${BUNGEE_VERSION}
     )
     set_source_files_properties(
       ${BUNGEE_LIBRARY_HEADERS} 

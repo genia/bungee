@@ -21,5 +21,6 @@ for PRESET in \
         --config Release \
         -j 3
     cmake \
-        --install builds/${PRESET}
+        --install builds/${PRESET} \
+        --config Release
 done
